@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import sys
@@ -12,7 +13,7 @@ from django.contrib.staticfiles.management.commands.collectstatic import (
     Command as CollectstaticCommand,
 )
 from django.core.management import call_command
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 
 from .cases import CollectionTestCase
 from .settings import TEST_ROOT
@@ -393,6 +394,48 @@ class TestCollectionNoneHashStorage(CollectionTestCase):
     def test_hashed_name(self):
         relpath = self.hashed_file_path('cached/styles.css')
         self.assertEqual(relpath, 'cached/styles.css')
+
+
+class TestCustomManifestStorage(SimpleTestCase):
+    def setUp(self):
+        staticfiles_storage_class = storage.ManifestStaticFilesStorage
+
+        self.manifest_path = Path(tempfile.mkdtemp())
+        self.manifest_file = self.manifest_path / staticfiles_storage_class.manifest_name
+        self.manifest = {
+            'version': staticfiles_storage_class.manifest_version,
+        }
+        with self.manifest_file.open('w') as manifest_file:
+            json.dump(self.manifest, manifest_file)
+
+        self.staticfiles_storage = staticfiles_storage_class(
+            manifest_storage=staticfiles_storage_class(location=self.manifest_path)
+        )
+
+    def tearDown(self):
+        try:
+            shutil.rmtree(self.manifest_path)
+        except FileNotFoundError:
+            self.assertEqual(self.removed_manifest, True)
+
+    def test_read_manifest_existing(self):
+        self.assertEqual(self.staticfiles_storage.read_manifest(), json.dumps(self.manifest))
+
+    def test_read_manifest_missing(self):
+        os.remove(self.manifest_file)
+        self.removed_manifest = True
+        self.assertIsNone(self.staticfiles_storage.read_manifest())
+
+    def test_save_manifest_override(self):
+        self.staticfiles_storage.save_manifest()
+        with open(self.manifest_file) as manifest_file:
+            manifest = json.loads(manifest_file.read())
+        self.assertLessEqual(self.manifest.items(), manifest.items())
+
+    def test_save_manifest_create(self):
+        os.remove(self.manifest_file)
+        self.staticfiles_storage.save_manifest()
+        self.assertTrue(os.path.isfile(self.manifest_file))
 
 
 @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.SimpleStorage')
